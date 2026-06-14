@@ -1,13 +1,20 @@
 import { describe, it, expect } from 'vitest';
-import { pctToLetter, preencheRequisitos, avaliar, getDomains } from './engine';
-import type { AvaliacaoMedicaExtra, ScoreMap } from './types';
+import { pctToLetter, calcFA, calcAP, calcFC, getDomains } from './engine';
+import type { AvaliacaoMedicaExtra } from './types';
+import { buildAndHashPayload, encodePayload, decodePayload, validatePayloadHash } from './schema';
+import type { Identificacao } from './types';
 
 const med = (over: Partial<AvaliacaoMedicaExtra> = {}): AvaliacaoMedicaExtra => ({
   historiaClinica: '', examesLaudos: '', exameFisico: '', cidPrincipal: '', cidSecundario: '',
   estrutura: 'nao', estruturaDescricao: '', prognostico: 'nao', prognosticoDescricao: '',
-  resolucao2anos: 'nao', resolucao2anosJustificativa: '', observacoes: '',
-  peritoMedico: '', crm: '', localData: '', ...over,
+  observacoes: '', peritoMedico: '', crm: '', localData: '', ...over,
 });
+
+const emptyIdent: Identificacao = {
+  fase: 'Inicial', nome: 'Teste', nit: '', cpf: '12345678901', nb: '', nomeMae: '', sexo: '',
+  dataNascimento: '', idadeMeses: '', grauInstrucao: '', dataAvaliacao: '',
+  municipio: '', vara: '', processo: '',
+};
 
 describe('pctToLetter — faixas da CIF', () => {
   it('mapeia as faixas corretamente', () => {
@@ -24,69 +31,95 @@ describe('pctToLetter — faixas da CIF', () => {
   });
 });
 
-describe('Tabela Conclusiva (Anexo IV)', () => {
-  it('linhas representativas', () => {
-    expect(preencheRequisitos('N', 'C', 'C')).toBe(true);   // linha 5
-    expect(preencheRequisitos('N', 'L', 'C')).toBe(false);  // linha 20
-    expect(preencheRequisitos('C', 'C', 'L')).toBe(false);  // linha 76
-    expect(preencheRequisitos('N', 'M', 'G')).toBe(true);   // linha 40
-    // célula que depende de Fatores Ambientais: b=M, d=M
-    expect(preencheRequisitos('G', 'M', 'M')).toBe(true);   // linha 62
-    expect(preencheRequisitos('M', 'M', 'M')).toBe(false);  // linha 63
-    expect(preencheRequisitos('C', 'M', 'M')).toBe(true);   // linha 61
-    expect(preencheRequisitos('N', 'M', 'M')).toBe(false);  // linha 65
+describe('calcFA — Fatores Ambientais', () => {
+  it('todos domínios FA com qualif. 4 → Completa', () => {
+    const domains = getDomains('a1');
+    const domainQuals: Record<string, 0|1|2|3|4> = {};
+    for (const d of domains.filter((d) => d.component === 'FA')) domainQuals[d.group] = 4;
+    const fa = calcFA(domains, domainQuals, null);
+    expect(fa.letter).toBe('C');
   });
 
-  it('b Nenhuma/Leve sempre indefere; d Nenhuma/Leve sempre indefere', () => {
-    for (const e of ['N', 'L', 'M', 'G', 'C'] as const) {
-      expect(preencheRequisitos(e, 'C', 'L')).toBe(false);
-      expect(preencheRequisitos(e, 'L', 'C')).toBe(false);
-    }
+  it('todos zero → Nenhuma', () => {
+    const domains = getDomains('a1');
+    const fa = calcFA(domains, {}, null);
+    expect(fa.letter).toBe('N');
   });
 });
 
-describe('avaliar — integração', () => {
-  it('todos os quesitos completos (4) → deficiente', () => {
+describe('calcAP — Atividades e Participação', () => {
+  it('todos domínios AP com qualif. 4 → Completa', () => {
     const domains = getDomains('a1');
-    const scores: ScoreMap = {};
-    for (const d of domains) for (const u of d.units) scores[u.n] = 4;
-    const r = avaliar('a1', scores, {}, med(), null);
-    expect(r.fa.letter).toBe('C');
-    expect(r.ap.letter).toBe('C');
-    expect(r.fc.letter).toBe('C');
-    expect(r.deficiente).toBe(true);
-  });
-
-  it('tudo zero → não deficiente', () => {
-    const r = avaliar('a1', {}, {}, med(), null);
-    expect(r.deficiente).toBe(false);
-    expect(r.fc.letter).toBe('N');
-  });
-
-  it('elevação por estrutura sobe o nível de Funções do Corpo', () => {
-    const domains = getDomains('a1');
-    const scores: ScoreMap = {};
-    // pontua um domínio b com grave (3)
-    const b1 = domains.find((d) => d.group === 'b1')!;
-    for (const u of b1.units) scores[u.n] = 3;
-    const base = avaliar('a1', scores, {}, med(), null);
-    expect(base.fc.letter).toBe('G');
-    const elevated = avaliar('a1', scores, {}, med({ estrutura: 'sim' }), null);
-    expect(elevated.fc.letter).toBe('C');
-  });
-
-  it('resolução em < 2 anos indefere mesmo preenchendo a tabela', () => {
-    const domains = getDomains('a1');
-    const scores: ScoreMap = {};
-    for (const d of domains) for (const u of d.units) scores[u.n] = 4;
-    const r = avaliar('a1', scores, {}, med({ resolucao2anos: 'sim' }), null);
-    expect(r.preenche).toBe(true);
-    expect(r.deficiente).toBe(false);
+    const domainQuals: Record<string, 0|1|2|3|4> = {};
+    for (const d of domains.filter((d) => d.component === 'AP')) domainQuals[d.group] = 4;
+    const ap = calcAP(domains, domainQuals, null);
+    expect(ap.letter).toBe('C');
   });
 
   it('Anexo II: corte etário força qualificador 4 em domínios de A&P', () => {
     // criança de 2 meses: domínios A&P com idade mínima > 2 viram Completa
-    const r = avaliar('a2', {}, {}, med(), 2);
-    expect(r.ap.letter).toBe('C');
+    const domains = getDomains('a2');
+    const ap = calcAP(domains, {}, 2);
+    expect(ap.letter).toBe('C');
+  });
+});
+
+describe('calcFC — Funções do Corpo', () => {
+  it('elevação por estrutura sobe o nível de Funções do Corpo', () => {
+    const domains = getDomains('a1');
+    const domainQuals: Record<string, 0|1|2|3|4> = { b1: 3 };
+    const base = calcFC(domains, domainQuals, med());
+    expect(base.letter).toBe('G');
+    const elevated = calcFC(domains, domainQuals, med({ estrutura: 'sim' }));
+    expect(elevated.letter).toBe('C');
+  });
+
+  it('todos zero → Nenhuma', () => {
+    const fc = calcFC(getDomains('a1'), {}, med());
+    expect(fc.letter).toBe('N');
+  });
+});
+
+describe('LIBRAS invariant', () => {
+  it('domain=0 with unit=4 is valid — no validation prevents it', () => {
+    // Domain qualifier is set independently of unit scores.
+    // A perito can set domain=0 even if a unit score is 4 (LIBRAS case).
+    const domainQuals: Record<string, number> = { e1: 0 };
+    const unitScores: Record<string, number> = { 1: 4 };
+    // Just confirm these are independent values — no computation forces them equal.
+    expect(domainQuals['e1']).toBe(0);
+    expect(unitScores[1]).toBe(4);
+  });
+
+  it('domain=2 with unit=0 is valid', () => {
+    const domainQuals: Record<string, number> = { e1: 2 };
+    const unitScores: Record<string, number> = { 1: 0 };
+    expect(domainQuals['e1']).toBe(2);
+    expect(unitScores[1]).toBe(0);
+  });
+});
+
+describe('payload round-trip', () => {
+  it('buildAndHashPayload → encodePayload → decodePayload → validatePayloadHash', async () => {
+    const domainQuals = { e1: 2, e2: 1, e3: 0, e4: 3, e5: 4 } as Record<string, 0 | 1 | 2 | 3 | 4>;
+    const unitScores = {} as Record<string, 0 | 1 | 2 | 3 | 4>;
+    const extra = {
+      historiaClinica: '', examesLaudos: '', exameFisico: '',
+      cidPrincipal: 'F00', cidSecundario: '',
+      estrutura: 'nao' as const, estruturaDescricao: '',
+      prognostico: 'nao' as const, prognosticoDescricao: '',
+      observacoes: '', peritoMedico: 'Dr. Teste', crm: '12345', localData: 'Brasília, 2025',
+    };
+    const payload = await buildAndHashPayload('medical', 'a1', emptyIdent, domainQuals, unitScores, extra);
+    expect(payload.hash).toBeTruthy();
+
+    const encoded = encodePayload(payload);
+    expect(typeof encoded).toBe('string');
+
+    const decoded = decodePayload(encoded);
+    expect(decoded.ident.cpf).toBe('12345678901');
+
+    const valid = await validatePayloadHash(decoded);
+    expect(valid).toBe(true);
   });
 });

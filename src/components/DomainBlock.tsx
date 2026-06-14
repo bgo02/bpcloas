@@ -1,76 +1,85 @@
-import type { Domain, Qualifier, ScoreMap, DomainOverride } from '@/lib/types';
-import { domainQualifier, LETTERS, LETTER_NAMES } from '@/lib/engine';
+import { useState } from 'react';
+import type { Domain, Qualifier, DomainQualifiers, UnitScores } from '@/lib/types';
+import { effectiveDomainQualifier, LETTER_NAMES, LETTERS } from '@/lib/engine';
 import QualifierSelect from './QualifierSelect';
-
-const QUAL_NAME = ['Nenhuma', 'Leve', 'Moderada', 'Grave', 'Completa'];
 
 interface Props {
   domain: Domain;
-  scores: ScoreMap;
-  override: DomainOverride;
+  domainQuals: DomainQualifiers;
+  unitScores: UnitScores;
   ageMonths: number | null;
-  onScore: (n: number, v: Qualifier) => void;
-  onOverride: (group: string, v: Qualifier | undefined) => void;
+  onDomainQual: (group: string, v: Qualifier) => void;
+  onUnitScore: (n: number, v: Qualifier) => void;
 }
 
-export default function DomainBlock({ domain, scores, override, ageMonths, onScore, onOverride }: Props) {
+export default function DomainBlock({ domain, domainQuals, unitScores, ageMonths, onDomainQual, onUnitScore }: Props) {
+  const [unitsOpen, setUnitsOpen] = useState(false);
   const autoMax = domain.minAgeMonths !== undefined && ageMonths !== null && ageMonths < domain.minAgeMonths;
-  const effective = domainQualifier(domain, scores, override, ageMonths);
-  const computedMax = domain.units.reduce<Qualifier>((m, u) => {
-    const s = scores[u.n];
-    return s !== undefined && s > m ? s : m;
-  }, 0);
+  const effective = effectiveDomainQualifier(domain, domainQuals, ageMonths);
 
   return (
     <div className="border border-gray-200 rounded-lg mb-3 overflow-hidden">
-      <div className="bg-slate-100 px-3 py-2 flex items-center justify-between gap-2">
-        <h4 className="text-sm font-semibold text-slate-800">
-          <span className="text-slate-400 mr-1">{domain.roman}</span>
-          {domain.title}
-          <span className="ml-2 text-xs font-normal text-slate-400">[{domain.group}]</span>
-        </h4>
-        <div className="flex items-center gap-2 text-xs">
-          <span className="text-slate-500">Qualif. do domínio:</span>
+      <div className="bg-slate-100 px-3 py-2">
+        <div className="flex items-center justify-between gap-2">
+          <h4 className="text-sm font-semibold text-slate-800">
+            <span className="text-slate-400 mr-1">{domain.roman}</span>
+            {domain.title}
+            <span className="ml-2 text-xs font-normal text-slate-400">[{domain.group}]</span>
+          </h4>
+          {!autoMax && (
+            <button
+              onClick={() => setUnitsOpen((o) => !o)}
+              className="text-xs text-slate-500 hover:text-slate-700 underline shrink-0"
+            >
+              {unitsOpen ? 'Ocultar unidades' : `Ver ${domain.units.length} unidades`}
+            </button>
+          )}
+        </div>
+
+        <div className="mt-2">
           {autoMax ? (
-            <span className="px-2 py-1 rounded bg-red-600 text-white font-semibold" title="Corte etário automático">
-              4 — Completa (corte etário)
+            <span className="inline-block px-2 py-1 rounded bg-red-600 text-white text-xs font-semibold" title="Corte etário automático">
+              4 — Completa (corte etário automático)
             </span>
           ) : (
-            <select
-              className="border border-gray-300 rounded px-1.5 py-1 bg-white"
-              value={override[domain.group] ?? ''}
-              onChange={(e) => onOverride(domain.group, e.target.value === '' ? undefined : (Number(e.target.value) as Qualifier))}
-            >
-              <option value="">auto (máx. = {computedMax} · {LETTERS[effective]})</option>
-              {[0, 1, 2, 3, 4].map((q) => (
-                <option key={q} value={q}>{q} — {QUAL_NAME[q]}</option>
-              ))}
-            </select>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-600 font-medium">Qualificador do domínio:</span>
+              <QualifierSelect
+                value={domainQuals[domain.group] ?? 0}
+                onChange={(v) => onDomainQual(domain.group, v)}
+              />
+              <span className="text-xs text-slate-500">
+                → {effective} ({LETTER_NAMES[LETTERS[effective]]})
+              </span>
+            </div>
           )}
         </div>
       </div>
 
-      {autoMax ? (
+      {autoMax && (
         <p className="px-3 py-2 text-xs text-slate-500">
-          Idade inferior ao corte etário do domínio ({domain.minAgeMonths} meses): dificuldade máxima automática
-          (qualificador 4 = Completa), conforme Anexo III. Unidades não precisam ser preenchidas.
+          Idade inferior ao corte etário do domínio ({domain.minAgeMonths} meses): qualificador 4 = Completa automático.
         </p>
-      ) : (
-        <ul className="divide-y divide-gray-100">
-          {domain.units.map((u) => (
-            <li key={u.n} className="px-3 py-2 flex items-start gap-3">
-              <span className="text-xs font-mono text-slate-400 w-7 shrink-0 pt-1">{u.n}</span>
-              <span className="text-xs text-slate-700 flex-1 leading-snug">{u.text}</span>
-              <div className="shrink-0 pt-0.5">
-                <QualifierSelect value={scores[u.n]} onChange={(v) => onScore(u.n, v)} />
-              </div>
-            </li>
-          ))}
-        </ul>
       )}
-      <div className="px-3 py-1.5 bg-slate-50 text-xs text-slate-500 border-t border-gray-100">
-        Qualificador efetivo: <strong className="text-slate-700">{effective} — {LETTER_NAMES[LETTERS[effective]]}</strong>
-      </div>
+
+      {!autoMax && unitsOpen && (
+        <div>
+          <p className="px-3 pt-2 text-xs text-amber-700 bg-amber-50 border-t border-amber-200">
+            Unidades para referência. O qualificador do domínio acima é o valor registrado no laudo.
+          </p>
+          <ul className="divide-y divide-gray-100">
+            {domain.units.map((u) => (
+              <li key={u.n} className="px-3 py-2 flex items-start gap-3">
+                <span className="text-xs font-mono text-slate-400 w-7 shrink-0 pt-1">{u.n}</span>
+                <span className="text-xs text-slate-700 flex-1 leading-snug">{u.text}</span>
+                <div className="shrink-0 pt-0.5">
+                  <QualifierSelect value={unitScores[u.n] ?? 0} onChange={(v) => onUnitScore(u.n, v)} />
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
